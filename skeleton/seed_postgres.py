@@ -1,10 +1,5 @@
 """
 Seed PostgreSQL with all TransitFlow mock data from train-mock-data/.
-
-Usage:
-    python skeleton/seed_postgres.py
-
-Run AFTER docker-compose up -d.
 """
 
 import json
@@ -31,11 +26,12 @@ def load(filename):
 def connect():
     return psycopg2.connect(
         host="localhost",
-        port=5433,               # 這裡直接改成 5433
-        dbname="transitflow",    # 這裡直接改成 transitflow
-        user="transitflow",      # 這裡直接改成 transitflow
-        password="transitflow"   # 這裡直接改成 transitflow
+        port=5433,               # 這裡已經寫死 5433
+        dbname="transitflow",
+        user="transitflow",
+        password="transitflow"
     )
+
 
 def insert_many(cur, table, columns, rows):
     """Bulk insert with ON CONFLICT DO NOTHING. Returns row count inserted."""
@@ -62,7 +58,7 @@ def seed_metro_stations(cur):
         rows.append((
             d['station_id'], 
             d['name'], 
-            json.dumps(d['lines']), # 將 List 轉回 JSON 字串以符合 JSONB 欄位
+            json.dumps(d['lines']),
             d.get('is_interchange_metro', False),
             json.dumps(d.get('interchange_metro_lines', [])),
             d.get('is_interchange_national_rail', False),
@@ -95,15 +91,12 @@ def seed_national_rail_stations(cur):
 
 def seed_metro_schedules(cur):
     data = load("metro_schedules.json")
-    # 拆分寫入主表 (metro_schedules)
     sch_cols = [
         'schedule_id', 'line', 'direction', 'origin_station_id', 'destination_station_id',
         'first_train_time', 'last_train_time', 'base_fare_usd', 'per_stop_rate_usd',
         'frequency_min', 'operates_on'
     ]
     sch_rows = []
-    
-    # 拆分寫入明細表 (metro_schedule_stops) - 達成正規化要求
     stop_cols = ['schedule_id', 'station_id', 'stop_order', 'travel_time_from_origin_min']
     stop_rows = []
     
@@ -138,17 +131,39 @@ def seed_national_rail_schedules(cur):
     stop_rows = []
 
     for d in data:
+        fare_info = d.get('fare_classes', {})
+        std_fare = fare_info.get('standard', {})
+        fst_fare = fare_info.get('first', {})
+        
+        standard_base = std_fare.get('base_fare_usd', 0.0)
+        standard_rate = std_fare.get('per_stop_rate_usd', 0.0)
+        first_base = fst_fare.get('base_fare_usd', 0.0)
+        first_rate = fst_fare.get('per_stop_rate_usd', 0.0)
+
         sch_rows.append((
             d['schedule_id'], d['line'], d['service_type'], d['direction'], d['origin_station_id'], 
             d['destination_station_id'], d['first_train_time'], d['last_train_time'], d['frequency_min'], 
-            json.dumps(d['operates_on']), d['standard_base_fare_usd'], d['standard_per_stop_rate_usd'], 
-            d['first_base_fare_usd'], d['first_per_stop_rate_usd']
+            json.dumps(d['operates_on']), 
+            standard_base, standard_rate, 
+            first_base, first_rate
         ))
-        for stop in d.get('stops', []):
+        
+        time_map = d.get('travel_time_from_origin_min', {})
+        
+        order_idx = 1
+        for station in d.get('stops_in_order', []):
+            t_time = time_map.get(station, 0)
             stop_rows.append((
-                d['schedule_id'], stop['station_id'], stop['stop_order'], 
-                stop['travel_time_from_origin_min'], stop.get('is_pass_through', False)
+                d['schedule_id'], station, order_idx, t_time, False
             ))
+            order_idx += 1
+            
+        for station in d.get('passed_through_stations', []):
+            t_time = time_map.get(station, 0)
+            stop_rows.append((
+                d['schedule_id'], station, order_idx, t_time, True
+            ))
+            order_idx += 1
             
     inserted_sch = insert_many(cur, 'national_rail_schedules', sch_cols, sch_rows)
     inserted_stops = insert_many(cur, 'national_rail_schedule_stops', stop_cols, stop_rows)
@@ -202,7 +217,6 @@ def seed_payments(cur):
     print(f"  -> Inserted {inserted} payments")
 
 
-# --- 未使用於基礎 ERD 的表格 (留空防呆) ---
 def seed_seat_layouts(cur):
     pass 
 
@@ -222,7 +236,6 @@ def main():
     cur = conn.cursor()
 
     try:
-        # 暫時關閉外鍵檢查以避免互相關聯 (捷運/台鐵) 的先後寫入衝突
         cur.execute("SET session_replication_role = 'replica';")
         
         print("Seeding tables (dependency order):")
@@ -237,7 +250,6 @@ def main():
         seed_payments(cur)
         seed_feedback(cur)
         
-        # 恢復外鍵檢查
         cur.execute("SET session_replication_role = 'origin';")
         
         conn.commit()

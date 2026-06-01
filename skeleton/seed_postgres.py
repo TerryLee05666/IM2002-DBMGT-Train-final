@@ -46,6 +46,17 @@ def insert_many(cur, table, columns, rows):
 
 
 # ── seeders ──────────────────────────────────────────────────────────────────
+#
+# Notes on conventions used below:
+#   * JSONB columns (lines, operates_on, ...) are passed as json.dumps(...) text;
+#     PostgreSQL accepts a valid JSON string when writing to a jsonb column.
+#   * metro_stations <-> national_rail_stations have a CIRCULAR foreign key
+#     (each can be the other's interchange). We insert metro_stations first with
+#     interchange_nr_station_id = NULL, then fill it in after the national-rail
+#     rows exist (see the UPDATE at the end of seed_national_rail_stations).
+#   * Schedules store their stop list in a nested structure, so each scheduler
+#     seeds BOTH the header table and its *_schedule_stops detail table.
+
 
 def seed_metro_stations(cur):
     data = load("metro_stations.json")

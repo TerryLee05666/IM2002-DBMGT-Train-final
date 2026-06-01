@@ -159,24 +159,19 @@ CREATE TABLE payments (
     paid_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- ============================================================
---  VECTOR SCHEMA  (RAG / Help Desk) — do not modify
--- ============================================================
+-- =============================================================================
+-- 4. SEAT INVENTORY DOMAIN (國鐵座位配置 — 正規化為配置主表 + 座位明細表)
+-- =============================================================================
+-- Source: national_rail_seat_layouts.json. Each layout belongs to one schedule
+-- and contains coaches; each coach lists individual seats. We normalise the
+-- nested structure into a header table (one row per layout) and a detail table
+-- (one row per physical seat). 'row'/'column' are SQL reserved-ish words, so we
+-- store them as seat_row / seat_column.
 
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE IF NOT EXISTS policy_documents (
-    id           SERIAL       PRIMARY KEY,
-    title        VARCHAR(200) NOT NULL,
-    category     VARCHAR(50)  NOT NULL,  -- 'refund', 'booking', 'conduct'
-    content      TEXT         NOT NULL,
-    -- 768-dim  → Ollama nomic-embed-text (default)
-    -- 3072-dim → Gemini gemini-embedding-001
-    -- If you switch LLM_PROVIDER to gemini, change to vector(3072) and reset the database.
-    embedding    vector(768),
-    source_file  VARCHAR(200),
-    created_at   TIMESTAMPTZ  DEFAULT NOW()
+CREATE TABLE seat_layouts (
+    layout_id   VARCHAR(20) PRIMARY KEY,
+    schedule_id VARCHAR(20) NOT NULL REFERENCES national_rail_schedules(schedule_id) ON DELETE RESTRICT
 );
 
--- Index for fast cosine similarity search
-CREATE INDEX IF NOT EXISTS ON policy_documents USING hnsw (embedding vector_cosine_ops);
+CREATE TABLE seat_layout_seats (
+    layout_id   VARCHAR(20) NOT NULL REFERENCES seat_layouts(layout_id) ON DELE

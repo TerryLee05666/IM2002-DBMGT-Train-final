@@ -53,98 +53,73 @@ def insert_many(cur, table, columns, rows):
 
 
 # ── seeders ──────────────────────────────────────────────────────────────────
+#
+# Notes on conventions used below:
+#   * JSONB columns (lines, operates_on, ...) are passed as json.dumps(...) text;
+#     PostgreSQL accepts a valid JSON string when writing to a jsonb column.
+#   * metro_stations <-> national_rail_stations have a CIRCULAR foreign key
+#     (each can be the other's interchange). We insert metro_stations first with
+#     interchange_nr_station_id = NULL, then fill it in after the national-rail
+#     rows exist (see the UPDATE at the end of seed_national_rail_stations).
+#   * Schedules store their stop list in a nested structure, so each scheduler
+#     seeds BOTH the header table and its *_schedule_stops detail table.
+
 
 def seed_metro_stations(cur):
     data = load("metro_stations.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    # Each item in `data` is a dict — inspect the JSON to see available fields.
-    pass
+    rows = [
+        (
+            s["station_id"],
+            s["name"],
+            json.dumps(s.get("lines", [])),
+            s.get("is_interchange_metro", False),
+            json.dumps(s["interchange_metro_lines"]) if s.get("interchange_metro_lines") is not None else None,
+            s.get("is_interchange_national_rail", False),
+            # circular FK: set later, once national_rail_stations exist
+            None,
+        )
+        for s in data
+    ]
+    n = insert_many(
+        cur, "metro_stations",
+        ["station_id", "name", "lines", "is_interchange_metro",
+         "interchange_metro_lines", "is_interchange_national_rail",
+         "interchange_nr_station_id"],
+        rows,
+    )
+    print(f"  metro_stations: {n} rows")
 
 
 def seed_national_rail_stations(cur):
     data = load("national_rail_stations.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
+    rows = [
+        (
+            s["station_id"],
+            s["name"],
+            json.dumps(s.get("lines", [])),
+            s.get("is_interchange_national_rail", False),
+            json.dumps(s["interchange_national_rail_lines"]) if s.get("interchange_national_rail_lines") is not None else None,
+            s.get("is_interchange_metro", False),
+            s.get("interchange_metro_station_id"),
+        )
+        for s in data
+    ]
+    n = insert_many(
+        cur, "national_rail_stations",
+        ["station_id", "name", "lines", "is_interchange_national_rail",
+         "interchange_national_rail_lines", "is_interchange_metro",
+         "interchange_metro_station_id"],
+        rows,
+    )
+    print(f"  national_rail_stations: {n} rows")
 
-
-def seed_metro_schedules(cur):
-    data = load("metro_schedules.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_national_rail_schedules(cur):
-    data = load("national_rail_schedules.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_seat_layouts(cur):
-    data = load("national_rail_seat_layouts.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_users(cur):
-    data = load("registered_users.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_national_rail_bookings(cur):
-    data = load("bookings.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_metro_travels(cur):
-    data = load("metro_travel_history.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_payments(cur):
-    data = load("payments.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-def seed_feedback(cur):
-    data = load("feedback.json")
-    # TODO: Design your table schema, then implement the INSERT logic here.
-    pass
-
-
-# ── main ─────────────────────────────────────────────────────────────────────
-
-def main():
-    print("Connecting to PostgreSQL...")
-    conn = connect()
-    conn.autocommit = False
-    cur = conn.cursor()
-
-    try:
-        print("Seeding tables (dependency order):")
-        seed_metro_stations(cur)
-        seed_national_rail_stations(cur)
-        seed_metro_schedules(cur)
-        seed_national_rail_schedules(cur)
-        seed_seat_layouts(cur)
-        seed_users(cur)
-        seed_national_rail_bookings(cur)
-        seed_metro_travels(cur)
-        seed_payments(cur)
-        seed_feedback(cur)
-        conn.commit()
-        print("\nAll done. Database seeded successfully.")
-    except Exception as e:
-        conn.rollback()
-        print(f"\nError: {e}")
-        raise
-    finally:
-        cur.close()
-        conn.close()
-
-
-if __name__ == "__main__":
-    main()
+    # Now that NR stations exist, complete the circular interchange link on the
+    # metro side (metro_stations.interchange_nr_station_id -> NR station).
+    metro = load("metro_stations.json")
+    linked = 0
+    for s in metro:
+        nr_id = s.get("interchange_national_rail_station_id")
+        if nr_id:
+            cur.execute(
+                "UPDATE metro_stations "
+  

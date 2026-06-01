@@ -159,6 +159,69 @@ CREATE TABLE payments (
     paid_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- =============================================================================
+-- 4. SEAT INVENTORY DOMAIN (國鐵座位配置 — 正規化為配置主表 + 座位明細表)
+-- =============================================================================
+-- Source: national_rail_seat_layouts.json. Each layout belongs to one schedule
+-- and contains coaches; each coach lists individual seats. We normalise the
+-- nested structure into a header table (one row per layout) and a detail table
+-- (one row per physical seat). 'row'/'column' are SQL reserved-ish words, so we
+-- store them as seat_row / seat_column.
+
+CREATE TABLE seat_layouts (
+    layout_id   VARCHAR(20) PRIMARY KEY,
+    schedule_id VARCHAR(20) NOT NULL REFERENCES national_rail_schedules(schedule_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE seat_layout_seats (
+    layout_id   VARCHAR(20) NOT NULL REFERENCES seat_layouts(layout_id) ON DELETE RESTRICT,
+    coach       VARCHAR(10) NOT NULL,
+    fare_class  VARCHAR(20) NOT NULL,
+    seat_id     VARCHAR(10) NOT NULL,
+    seat_row    INTEGER NOT NULL,
+    seat_column VARCHAR(5) NOT NULL,
+    PRIMARY KEY (layout_id, seat_id)
+);
+
+-- =============================================================================
+-- 5. METRO TRAVEL HISTORY DOMAIN (地鐵搭乘紀錄 — 採用旅程 ID 作為自然主鍵)
+-- =============================================================================
+-- Source: metro_travel_history.json. Metro trips are pay-as-you-go (no seat
+-- reservation), so this is a flat fact table rather than a booking with a seat.
+
+CREATE TABLE metro_travels (
+    trip_id                VARCHAR(20) PRIMARY KEY,
+    user_id                VARCHAR(20) NOT NULL REFERENCES registered_users(user_id) ON DELETE RESTRICT,
+    schedule_id            VARCHAR(20) NOT NULL REFERENCES metro_schedules(schedule_id) ON DELETE RESTRICT,
+    origin_station_id      VARCHAR(20) NOT NULL REFERENCES metro_stations(station_id) ON DELETE RESTRICT,
+    destination_station_id VARCHAR(20) NOT NULL REFERENCES metro_stations(station_id) ON DELETE RESTRICT,
+    travel_date            DATE NOT NULL,
+    ticket_type            VARCHAR(20) NOT NULL,
+    stops_travelled        INTEGER NOT NULL,
+    amount_usd             DECIMAL(10, 2) NOT NULL,
+    status                 VARCHAR(20) NOT NULL,
+    purchased_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    travelled_at           TIMESTAMPTZ
+);
+
+-- =============================================================================
+-- 6. FEEDBACK DOMAIN (旅客回饋)
+-- =============================================================================
+-- Source: feedback.json. NOTE — booking_id here is POLYMORPHIC: it may point at
+-- either a national_rail_bookings.booking_id ('BK...') OR a
+-- metro_travels.trip_id ('MT...'). Because a single column cannot foreign-key to
+-- two different parent tables, we deliberately leave booking_id as a plain
+-- VARCHAR (no FK), matching the same decision already made for payments.booking_id.
+
+CREATE TABLE feedback (
+    feedback_id  VARCHAR(20) PRIMARY KEY,
+    booking_id   VARCHAR(20) NOT NULL,   -- polymorphic: BK* (booking) or MT* (metro trip)
+    user_id      VARCHAR(20) NOT NULL REFERENCES registered_users(user_id) ON DELETE RESTRICT,
+    rating       INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment      TEXT,
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- ============================================================
 --  VECTOR SCHEMA  (RAG / Help Desk) — do not modify
 -- ============================================================

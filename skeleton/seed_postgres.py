@@ -30,13 +30,12 @@ def load(filename):
 
 def connect():
     return psycopg2.connect(
-        host=cfg.PG_HOST,
-        port=cfg.PG_PORT,
-        dbname=cfg.PG_DB,
-        user=cfg.PG_USER,
-        password=cfg.PG_PASSWORD,
+        host="localhost",
+        port=5433,               # 這裡直接改成 5433
+        dbname="transitflow",    # 這裡直接改成 transitflow
+        user="transitflow",      # 這裡直接改成 transitflow
+        password="transitflow"   # 這裡直接改成 transitflow
     )
-
 
 def insert_many(cur, table, columns, rows):
     """Bulk insert with ON CONFLICT DO NOTHING. Returns row count inserted."""

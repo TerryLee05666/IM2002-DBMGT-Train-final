@@ -174,4 +174,58 @@ CREATE TABLE seat_layouts (
 );
 
 CREATE TABLE seat_layout_seats (
-    layout_id   VARCHAR(20) NOT NULL REFERENCES seat_layouts(layout_id) ON DELE
+    layout_id   VARCHAR(20) NOT NULL REFERENCES seat_layouts(layout_id) ON DELETE RESTRICT,
+    seat_id     VARCHAR(10) NOT NULL,
+    coach       VARCHAR(10) NOT NULL,
+    fare_class  VARCHAR(20) NOT NULL,
+    seat_row    INTEGER NOT NULL,
+    seat_column INTEGER NOT NULL,
+    PRIMARY KEY (layout_id, seat_id)
+);
+
+-- =============================================================================
+-- 5. METRO TRAVEL HISTORY (地鐵旅行紀錄)
+-- =============================================================================
+
+CREATE TABLE metro_travels (
+    trip_id         VARCHAR(20) PRIMARY KEY,
+    user_id         VARCHAR(20) NOT NULL REFERENCES registered_users(user_id) ON DELETE RESTRICT,
+    schedule_id     VARCHAR(20) NOT NULL REFERENCES metro_schedules(schedule_id) ON DELETE RESTRICT,
+    origin_station_id      VARCHAR(20) NOT NULL REFERENCES metro_stations(station_id) ON DELETE RESTRICT,
+    destination_station_id VARCHAR(20) NOT NULL REFERENCES metro_stations(station_id) ON DELETE RESTRICT,
+    travel_date     DATE NOT NULL,
+    ticket_type     VARCHAR(20) NOT NULL DEFAULT 'single',
+    fare_class      VARCHAR(20) NOT NULL DEFAULT 'standard',
+    amount_usd      DECIMAL(10,2) NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'completed',
+    travelled_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
+-- 6. FEEDBACK (乘客回饋)
+-- =============================================================================
+
+CREATE TABLE feedback (
+    feedback_id     VARCHAR(20) PRIMARY KEY,
+    user_id         VARCHAR(20) NOT NULL REFERENCES registered_users(user_id) ON DELETE RESTRICT,
+    booking_id      VARCHAR(20),
+    rating          INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment         TEXT,
+    category        VARCHAR(50),
+    submitted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
+-- 7. VECTOR / RAG — policy documents (do not modify)
+-- =============================================================================
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE policy_documents (
+    id          SERIAL PRIMARY KEY,
+    title       TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    embedding   vector(768),
+    source_file TEXT DEFAULT ''
+);

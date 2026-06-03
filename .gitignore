@@ -59,3 +59,5 @@ gradio_cached_examples/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+CLAUDE.md

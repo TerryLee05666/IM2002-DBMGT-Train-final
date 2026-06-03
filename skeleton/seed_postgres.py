@@ -117,9 +117,10 @@ def seed_metro_schedules(cur):
             d['destination_station_id'], d['first_train_time'], d['last_train_time'], 
             d['base_fare_usd'], d['per_stop_rate_usd'], d['frequency_min'], json.dumps(d['operates_on'])
         ))
-        for stop in d.get('stops', []):
+        time_map = d.get('travel_time_from_origin_min', {})
+        for order_idx, station_id in enumerate(d.get('stops_in_order', []), start=1):
             stop_rows.append((
-                d['schedule_id'], stop['station_id'], stop['stop_order'], stop['travel_time_from_origin_min']
+                d['schedule_id'], station_id, order_idx, time_map.get(station_id, 0)
             ))
             
     inserted_sch = insert_many(cur, 'metro_schedules', sch_cols, sch_rows)

@@ -264,11 +264,14 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
             # Find path across both networks via INTERCHANGE
             result = session.run(
                 """
-                MATCH origin, dest
-                WHERE (origin:MetroStation {station_id: $origin_id} OR origin:RailStation {station_id: $origin_id})
-                  AND (dest:MetroStation {station_id: $dest_id} OR dest:RailStation {station_id: $dest_id})
+                MATCH (origin)
+                WHERE (origin:MetroStation OR origin:RailStation)
+                  AND origin.station_id = $origin_id
+                MATCH (dest)
+                WHERE (dest:MetroStation OR dest:RailStation)
+                  AND dest.station_id = $dest_id
                 MATCH p = (origin)-[*..20]-(dest)
-                WITH p, REDUCE(s=0, r IN relationships(p) WHERE r.travel_time_min IS NOT NULL | s + r.travel_time_min) AS time
+                WITH p, REDUCE(s=0, r IN relationships(p) | s + coalesce(r.travel_time_min, 0)) AS time
                 ORDER BY time
                 LIMIT 1
                 RETURN p, time
@@ -335,19 +338,19 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
     """
     with _driver() as driver:
         with driver.session() as session:
-            result = session.run(
-                """
+            cypher = f"""
                 MATCH (delayed)
-                WHERE (delayed:MetroStation {station_id: $delayed_id} OR delayed:RailStation {station_id: $delayed_id})
-                MATCH (delayed)-[*1..%d]-(affected)
+                WHERE (delayed:MetroStation OR delayed:RailStation)
+                  AND delayed.station_id = $delayed_id
+                MATCH path = (delayed)-[*1..{hops}]-(affected)
+                WHERE affected.station_id <> $delayed_id
                 RETURN DISTINCT affected.station_id AS station_id,
                                affected.name AS name,
-                               MIN(length(shortestPath((delayed)-[*]-(affected)))) AS hops_away,
-                               COLLECT(DISTINCT r.line) AS lines
+                               MIN(length(path)) AS hops_away,
+                               COLLECT(DISTINCT last(relationships(path)).line) AS lines
                 ORDER BY hops_away
-                """ % hops,
-                delayed_id=delayed_station_id,
-            )
+            """
+            result = session.run(cypher, delayed_id=delayed_station_id)
             records = result.fetch(100)
     
     affected_stations = []
@@ -377,7 +380,8 @@ def query_station_connections(station_id: str) -> list[dict]:
             result = session.run(
                 """
                 MATCH (station)-[r]->(connected)
-                WHERE (station:MetroStation {station_id: $id} OR station:RailStation {station_id: $id})
+                WHERE (station:MetroStation OR station:RailStation)
+                  AND station.station_id = $id
                 RETURN connected.station_id AS station_id,
                        connected.name AS name,
                        LABELS(connected)[0] AS network_type,

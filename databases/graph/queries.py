@@ -73,7 +73,7 @@ def query_shortest_route(
         network = "metro" if origin_id.startswith("MS") else "rail"
     
     # Choose node label and link type
-    node_label = "MetroStation" if network == "metro" else "RailStation"
+    node_label = "MetroStation" if network == "metro" else "NationalRailStation"
     link_rel = "METRO_LINK|RAIL_LINK" if network == "metro" else "RAIL_LINK"
     link_rel_single = "METRO_LINK" if network == "metro" else "RAIL_LINK"
     
@@ -189,7 +189,7 @@ def query_alternative_routes(
     if network == "auto":
         network = "metro" if origin_id.startswith("MS") else "rail"
     
-    node_label = "MetroStation" if network == "metro" else "RailStation"
+    node_label = "MetroStation" if network == "metro" else "NationalRailStation"
     link_rel_single = "METRO_LINK" if network == "metro" else "RAIL_LINK"
     
     with _driver() as driver:
@@ -241,7 +241,7 @@ def query_alternative_routes(
     return routes
 
 
-# ── CROSS-NETWORK INTERCHANGE PATH ───────────────────────────────────────────
+# ── CROSS-NETWORK INTERCHANGE_TO PATH ───────────────────────────────────────────
 
 def query_interchange_path(origin_id: str, destination_id: str) -> dict:
     """
@@ -261,14 +261,14 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
     
     with _driver() as driver:
         with driver.session() as session:
-            # Find path across both networks via INTERCHANGE
+            # Find path across both networks via INTERCHANGE_TO
             result = session.run(
                 """
                 MATCH (origin)
-                WHERE (origin:MetroStation OR origin:RailStation)
+                WHERE (origin:MetroStation OR origin:NationalRailStation)
                   AND origin.station_id = $origin_id
                 MATCH (dest)
-                WHERE (dest:MetroStation OR dest:RailStation)
+                WHERE (dest:MetroStation OR dest:NationalRailStation)
                   AND dest.station_id = $dest_id
                 MATCH p = (origin)-[*..20]-(dest)
                 WITH p, REDUCE(s=0, r IN relationships(p) | s + coalesce(r.travel_time_min, 0)) AS time
@@ -309,7 +309,7 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
         if i > 0 and i < len(path.nodes) - 1:
             prev_rel = path.relationships[i - 1]
             next_rel = path.relationships[i]
-            if prev_rel.type == "INTERCHANGE" or next_rel.type == "INTERCHANGE":
+            if prev_rel.type == "INTERCHANGE_TO" or next_rel.type == "INTERCHANGE_TO":
                 interchange_points.append(node["station_id"])
     
     return {
@@ -340,7 +340,7 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
         with driver.session() as session:
             cypher = f"""
                 MATCH (delayed)
-                WHERE (delayed:MetroStation OR delayed:RailStation)
+                WHERE (delayed:MetroStation OR delayed:NationalRailStation)
                   AND delayed.station_id = $delayed_id
                 MATCH path = (delayed)-[*1..{hops}]-(affected)
                 WHERE affected.station_id <> $delayed_id
@@ -380,7 +380,7 @@ def query_station_connections(station_id: str) -> list[dict]:
             result = session.run(
                 """
                 MATCH (station)-[r]->(connected)
-                WHERE (station:MetroStation OR station:RailStation)
+                WHERE (station:MetroStation OR station:NationalRailStation)
                   AND station.station_id = $id
                 RETURN connected.station_id AS station_id,
                        connected.name AS name,

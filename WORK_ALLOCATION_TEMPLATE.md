@@ -12,7 +12,7 @@
 |-----------|-----------|----------------|-------|
 | 李庭宇|113403523 |TerryLee05666 |terry@abbottlee.com |
 | 商逢育|113403513 |adsgg-00 |q0951099000@gmail.com |
-| | | | |
+|張靖賦|113403051 |Jacob-0120 jaco8268@gmail.com| |
 
 ---
 
@@ -80,5 +80,5 @@ We confirm that this work allocation accurately reflects how responsibilities we
 | Name | Signature / Typed name | Date |
 |------|----------------------|------|
 |商逢育|商逢育|2026/06/11|
-| | | |
-| | | |
+|李庭宇 |李庭宇 |2026/06/11 |
+|張靖賦|張靖賦 |2026/6/11 |

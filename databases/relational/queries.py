@@ -28,10 +28,21 @@ import string
 from datetime import datetime, timezone
 from typing import Optional
 
+import bcrypt
 import psycopg2
 import psycopg2.extras
 
 from skeleton.config import PG_DSN, VECTOR_TOP_K, VECTOR_SIMILARITY_THRESHOLD
+
+
+def _hash_password(plain: str) -> str:
+    """Hash a plain-text password using bcrypt. Returns the hashed string."""
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    """Verify a plain-text password against a bcrypt hash."""
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 def _connect():
@@ -671,6 +682,9 @@ def register_user(
     full_name = f"{first_name} {surname}"
     dob = f"{year_of_birth}-01-01"
 
+    # Hash the password with bcrypt before storing — never store plain text
+    hashed_password = _hash_password(password)
+
     insert_sql = """
         INSERT INTO registered_users
             (user_id, full_name, email, password, date_of_birth,
@@ -681,7 +695,7 @@ def register_user(
     try:
         with conn.cursor() as cur:
             cur.execute(insert_sql, (
-                user_id, full_name, email, password, dob,
+                user_id, full_name, email, hashed_password, dob,
                 secret_question, secret_answer.lower().strip(),
             ))
         conn.commit()
@@ -698,20 +712,27 @@ def login_user(email: str, password: str) -> Optional[dict]:
     """
     Verify credentials. Returns a user dict on success or None on failure.
     Dict keys: user_id, email, full_name, first_name, surname, phone, date_of_birth, is_active.
+
+    Password is verified using bcrypt — the stored hash is never compared directly.
     """
     sql = """
         SELECT user_id, email, full_name, phone,
-               date_of_birth::text, is_active
+               date_of_birth::text, is_active, password AS hashed_password
         FROM registered_users
-        WHERE email = %s AND password = %s AND is_active = TRUE
+        WHERE email = %s AND is_active = TRUE
     """
     with _connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (email, password))
+            cur.execute(sql, (email,))
             row = cur.fetchone()
     if not row:
         return None
+
     row = dict(row)
+    # Verify the plain-text password against the stored bcrypt hash
+    if not _verify_password(password, row.pop("hashed_password")):
+        return None
+
     name_parts = row["full_name"].split(" ", 1)
     row["first_name"] = name_parts[0]
     row["surname"] = name_parts[1] if len(name_parts) > 1 else ""
@@ -745,13 +766,15 @@ def verify_secret_answer(email: str, answer: str) -> bool:
 
 
 def update_password(email: str, new_password: str) -> bool:
-    """Update the password for a user. Returns True if the row was updated."""
+    """Update the password for a user. Hashes with bcrypt before storing. Returns True if updated."""
+    # Hash the new password before storing
+    hashed = _hash_password(new_password)
     conn = psycopg2.connect(PG_DSN)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE registered_users SET password = %s WHERE email = %s",
-                (new_password, email),
+                (hashed, email),
             )
             updated = cur.rowcount
         conn.commit()

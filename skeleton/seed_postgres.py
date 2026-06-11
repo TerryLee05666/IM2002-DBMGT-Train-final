@@ -13,6 +13,8 @@ import json
 import os
 import sys
 
+import bcrypt
+
 import psycopg2
 from psycopg2.extras import execute_values
 
@@ -271,7 +273,8 @@ def seed_users(cur):
             u["user_id"],
             u["full_name"],
             u["email"],
-            u["password"],
+            # Hash plain-text password from JSON using bcrypt before storing
+            bcrypt.hashpw(u["password"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
             u.get("phone"),
             u.get("date_of_birth"),
             u.get("secret_question"),
@@ -336,7 +339,7 @@ def seed_metro_travels(cur):
             t["destination_station_id"],
             t["travel_date"],
             t["ticket_type"],
-            t["stops_travelled"],
+            t.get("stops_travelled") or 0,  # day_pass records may have null stops
             t["amount_usd"],
             t["status"],
             t.get("purchased_at"),

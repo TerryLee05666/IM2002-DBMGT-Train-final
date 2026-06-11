@@ -68,18 +68,20 @@ def query_shortest_route(
         dict with keys: found, origin_id, destination_id,
                         total_time_min, path (list of station dicts), legs
     """
-    # Determine network from station IDs if auto
+    # Infer the network from the station ID prefix — "MS" = metro, "NR" = rail.
+    # This avoids the caller needing to know which network a station belongs to.
     if network == "auto":
         network = "metro" if origin_id.startswith("MS") else "rail"
-    
-    # Choose node label and link type
+
+    # Node label and relationship type must match what was created in seed_neo4j.py.
+    # We use APOC Dijkstra because standard Cypher shortestPath does not support
+    # weighted edges — travel_time_min is the weight we want to minimise.
     node_label = "MetroStation" if network == "metro" else "NationalRailStation"
     link_rel = "METRO_LINK|RAIL_LINK" if network == "metro" else "RAIL_LINK"
     link_rel_single = "METRO_LINK" if network == "metro" else "RAIL_LINK"
-    
+
     with _driver() as driver:
         with driver.session() as session:
-            # Try to find shortest path using Dijkstra
             result = session.run(
                 f"""
                 MATCH (origin:{node_label} {{station_id: $origin_id}})
@@ -338,6 +340,11 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
     """
     with _driver() as driver:
         with driver.session() as session:
+            # Variable-length pattern [*1..N] traverses up to N hops in any direction.
+            # We use MIN(length(path)) per station to report the shortest hop distance,
+            # since multiple paths may exist to the same affected station.
+            # last(relationships(path)).line extracts the line of the final edge,
+            # giving an indication of which service is disrupted at each hop.
             cypher = f"""
                 MATCH (delayed)
                 WHERE (delayed:MetroStation OR delayed:NationalRailStation)

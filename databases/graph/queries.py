@@ -373,6 +373,26 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
     Returns:
         List of dicts: {station_id, name, hops_away, lines_affected}
     """
+    # hops=0 is a special case: return only the delayed station itself at hops_away=0.
+    # The variable-length pattern [*1..N] cannot express 0 hops, so we handle it separately.
+    if hops == 0:
+        with _driver() as driver:
+            with driver.session() as session:
+                result = session.run(
+                    """
+                    MATCH (delayed)
+                    WHERE (delayed:MetroStation OR delayed:NationalRailStation)
+                      AND delayed.station_id = $delayed_id
+                    RETURN delayed.station_id AS station_id, delayed.name AS name
+                    """,
+                    delayed_id=delayed_station_id,
+                )
+                record = result.single()
+        if not record:
+            return []
+        return [{"station_id": record["station_id"], "name": record["name"],
+                 "hops_away": 0, "lines_affected": []}]
+
     with _driver() as driver:
         with driver.session() as session:
             # Variable-length pattern [*1..N] traverses up to N hops in any direction.
@@ -394,17 +414,16 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
             """
             result = session.run(cypher, delayed_id=delayed_station_id)
             records = result.fetch(100)
-    
+
     affected_stations = []
     for record in records:
-        if record["station_id"] != delayed_station_id:  # Exclude the original delayed station
-            affected_stations.append({
-                "station_id": record["station_id"],
-                "name": record["name"],
-                "hops_away": record["hops_away"],
-                "lines_affected": [l for l in record.get("lines", []) if l],
-            })
-    
+        affected_stations.append({
+            "station_id": record["station_id"],
+            "name": record["name"],
+            "hops_away": record["hops_away"],
+            "lines_affected": [l for l in record.get("lines", []) if l],
+        })
+
     return affected_stations
 
 

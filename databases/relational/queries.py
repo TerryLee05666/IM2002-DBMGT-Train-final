@@ -141,7 +141,9 @@ def query_national_rail_availability(
             rows = [dict(row) for row in cur.fetchall()]
 
     if travel_date and rows:
-        # Count confirmed bookings for each schedule on that date
+        # Count confirmed bookings and derive available_seats for each schedule on that date.
+        # Total capacity is estimated as coaches * rows * columns (standard layout).
+        TOTAL_SEATS = 80  # 4 coaches × 10 rows × 4 columns = 160, use 80 per fare class
         for row in rows:
             with _connect() as conn:
                 with conn.cursor() as cur:
@@ -152,7 +154,9 @@ def query_national_rail_availability(
                         """,
                         (row["schedule_id"], travel_date),
                     )
-                    row["bookings_on_date"] = cur.fetchone()[0]
+                    booked = cur.fetchone()[0]
+                    row["bookings_on_date"] = booked
+                    row["available_seats"] = max(0, TOTAL_SEATS - booked)
 
     return rows
 
@@ -375,7 +379,9 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
 def query_user_profile(user_email: str) -> Optional[dict]:
     """Return a user's profile by email."""
     sql = """
-        SELECT user_id, full_name, email, phone, date_of_birth::text,
+        SELECT user_id, full_name, email, phone,
+               date_of_birth::text,
+               EXTRACT(YEAR FROM date_of_birth)::int AS year_of_birth,
                registered_at::text, is_active
         FROM registered_users
         WHERE email = %s

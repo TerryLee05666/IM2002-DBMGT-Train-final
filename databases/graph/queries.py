@@ -1,3 +1,4 @@
+# TASK 6 EXTENSION: fixed query_cheapest_route to use fare_class for cost estimation
 """
 TransitFlow — Neo4j Graph Database Layer
 =========================================

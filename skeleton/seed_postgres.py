@@ -1,3 +1,4 @@
+# TASK 6 EXTENSION: added seed_delay_records function to populate delay_records table
 """
 Seed PostgreSQL with all TransitFlow mock data from train-mock-data/.
 

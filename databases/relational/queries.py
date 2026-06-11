@@ -1,3 +1,4 @@
+# TASK 6 EXTENSION: added query_active_delays function and delay_records query support
 """
 TransitFlow — PostgreSQL / Relational Database Layer
 =====================================================

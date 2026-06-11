@@ -222,6 +222,38 @@ CREATE TABLE feedback (
     submitted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- =============================================================================
+-- TASK 6 EXTENSION: DELAY RECORDS DOMAIN (服務延誤紀錄)
+-- =============================================================================
+-- Records operator-reported delays per schedule and station.
+-- Using resolved_at = NULL to distinguish active (unresolved) from historical delays,
+-- so the assistant can answer "is my train delayed right now?" without a status enum.
+-- Indexes on schedule_id and station_id support fast filtered lookups;
+-- the resolved_at index enables efficient filtering of active-only delays.
+
+CREATE TABLE delay_records (
+    delay_id      VARCHAR(20) PRIMARY KEY,
+    -- FK to the affected schedule — RESTRICT prevents deleting a schedule that has delay history
+    schedule_id   VARCHAR(20) NOT NULL REFERENCES national_rail_schedules(schedule_id) ON DELETE RESTRICT,
+    -- FK to the station where the delay was first reported
+    station_id    VARCHAR(20) NOT NULL REFERENCES national_rail_stations(station_id) ON DELETE RESTRICT,
+    -- Delay length in minutes; must be positive (a 0-minute delay is not a delay)
+    delay_minutes INTEGER     NOT NULL CHECK (delay_minutes > 0),
+    -- Human-readable cause reported by the operator (nullable — reason may not always be known)
+    reason        TEXT,
+    reported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- NULL means the delay is still active; set to a timestamp when the disruption is resolved
+    resolved_at   TIMESTAMPTZ
+);
+
+-- Supports fast lookups of delays for a given schedule (used by query_active_delays)
+CREATE INDEX idx_delay_records_schedule ON delay_records(schedule_id);
+-- Supports fast lookups of delays affecting a given station
+CREATE INDEX idx_delay_records_station  ON delay_records(station_id);
+-- Partial index over unresolved delays only — makes "active delays" queries very fast
+-- as the index skips all historical (resolved) rows
+CREATE INDEX idx_delay_records_active   ON delay_records(reported_at) WHERE resolved_at IS NULL;
+
 -- ============================================================
 --  VECTOR SCHEMA  (RAG / Help Desk) — do not modify
 -- ============================================================

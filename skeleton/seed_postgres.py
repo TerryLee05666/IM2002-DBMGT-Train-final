@@ -379,6 +379,30 @@ def seed_payments(cur):
     print(f"  payments: {n} rows")
 
 
+# TASK 6 EXTENSION: seed delay records from train-mock-data/delay_records.json
+def seed_delay_records(cur):
+    data = load("delay_records.json")
+    rows = [
+        (
+            d["delay_id"],
+            d["schedule_id"],
+            d["station_id"],
+            d["delay_minutes"],
+            d.get("reason"),
+            d.get("reported_at"),
+            d.get("resolved_at"),  # None for active delays — NULL in DB
+        )
+        for d in data
+    ]
+    n = insert_many(
+        cur, "delay_records",
+        ["delay_id", "schedule_id", "station_id", "delay_minutes",
+         "reason", "reported_at", "resolved_at"],
+        rows,
+    )
+    print(f"  delay_records: {n} rows")
+
+
 def seed_feedback(cur):
     data = load("feedback.json")
     rows = [
@@ -420,6 +444,7 @@ def main():
         seed_metro_travels(cur)
         seed_payments(cur)
         seed_feedback(cur)
+        seed_delay_records(cur)  # TASK 6 EXTENSION
         conn.commit()
         print("\nAll done. Database seeded successfully.")
     except Exception as e:

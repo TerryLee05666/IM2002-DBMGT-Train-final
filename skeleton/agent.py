@@ -47,6 +47,7 @@ from databases.relational.queries import (
     execute_booking,
     execute_cancellation,
     query_policy_vector_search,
+    query_active_delays,          # TASK 6 EXTENSION
 )
 from databases.graph.queries import (
     query_shortest_route,
@@ -54,6 +55,7 @@ from databases.graph.queries import (
     query_alternative_routes,
     query_interchange_path,
     query_delay_ripple,
+    query_station_connections,    # TASK 6 EXTENSION
 )
 
 
@@ -272,6 +274,33 @@ TOOLS = [
         },
         "required": ["station_id"],
     },
+    # TASK 6 EXTENSION: check reported service delays from the delay_records table
+    {
+        "name": "check_service_delays",
+        "description": (
+            "Check reported service delays for a national rail schedule or station. "
+            "Use when the user asks if their train is delayed, running on time, or "
+            "about disruptions on a specific service or at a specific station."
+        ),
+        "parameters": {
+            "schedule_id": {"type": "string", "description": "Schedule ID e.g. NR_SCH01 (optional)"},
+            "station_id":  {"type": "string", "description": "National rail station ID e.g. NR02 (optional)"},
+        },
+        "required": [],
+    },
+    # TASK 6 EXTENSION: list all direct neighbours of a station in the graph
+    {
+        "name": "get_station_connections",
+        "description": (
+            "List all stations directly connected to a given station, with travel times. "
+            "Use when the user asks which stations are reachable from a station, "
+            "or which lines pass through it."
+        ),
+        "parameters": {
+            "station_id": {"type": "string", "description": "Station ID e.g. MS01 or NR01"},
+        },
+        "required": ["station_id"],
+    },
 ]
 
 TOOLS_SCHEMA = """\
@@ -286,7 +315,9 @@ cancel_booking(booking_id)
 get_user_bookings()
 search_policy(query)
 find_alternative_routes(origin_id, destination_id, avoid_station_id, network?)
-get_delay_ripple(station_id, hops?)"""
+get_delay_ripple(station_id, hops?)
+check_service_delays(schedule_id?, station_id?)
+get_station_connections(station_id)"""
 
 
 # ── Agent logic ───────────────────────────────────────────────────────────────
@@ -435,6 +466,17 @@ def _execute_tool(
                 delayed_station_id=params["station_id"],
                 hops=params.get("hops", 2),
             )
+
+        # TASK 6 EXTENSION: query delay_records table for reported service disruptions
+        elif tool_name == "check_service_delays":
+            result = query_active_delays(
+                schedule_id=params.get("schedule_id"),
+                station_id=params.get("station_id"),
+            )
+
+        # TASK 6 EXTENSION: list direct graph neighbours of a station
+        elif tool_name == "get_station_connections":
+            result = query_station_connections(station_id=params["station_id"])
 
         else:
             result = {"error": f"Unknown tool: {tool_name}"}

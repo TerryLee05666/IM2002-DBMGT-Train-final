@@ -800,6 +800,55 @@ def update_password(email: str, new_password: str) -> bool:
     return updated > 0
 
 
+# TASK 6 EXTENSION: DELAY RECORDS QUERY ──────────────────────────────────────
+
+def query_active_delays(
+    schedule_id: Optional[str] = None,
+    station_id: Optional[str] = None,
+) -> list[dict]:
+    """
+    Return delay records filtered by schedule or station.
+    Active delays (resolved_at IS NULL) are always returned first so the
+    assistant can lead with the most urgent information.
+
+    Args:
+        schedule_id: Filter to a specific schedule e.g. 'NR_SCH01' (optional)
+        station_id:  Filter to a specific station e.g. 'NR02' (optional)
+
+    Returns:
+        List of dicts with delay_id, schedule_id, station_id, station_name,
+        delay_minutes, reason, reported_at, resolved_at, and is_active flag.
+    """
+    # We JOIN national_rail_stations to surface the human-readable station name
+    # alongside the station_id — the LLM can then present "Maplewood (NR02)"
+    # rather than a bare ID that means nothing to the user.
+    # ORDER BY: active delays (NULL resolved_at) first, then most-recently-reported.
+    # COALESCE(resolved_at, 'infinity') puts NULLs at the top when ordering DESC.
+    sql = """
+        SELECT
+            d.delay_id,
+            d.schedule_id,
+            d.station_id,
+            s.name AS station_name,
+            d.delay_minutes,
+            d.reason,
+            d.reported_at::text,
+            d.resolved_at::text,
+            (d.resolved_at IS NULL) AS is_active
+        FROM delay_records d
+        JOIN national_rail_stations s ON s.station_id = d.station_id
+        WHERE (%s IS NULL OR d.schedule_id = %s)
+          AND (%s IS NULL OR d.station_id  = %s)
+        ORDER BY
+            (d.resolved_at IS NULL) DESC,   -- active (NULL) first
+            d.reported_at DESC
+    """
+    with _connect() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (schedule_id, schedule_id, station_id, station_id))
+            return [dict(row) for row in cur.fetchall()]
+
+
 # ── VECTOR / RAG QUERIES — do not modify ─────────────────────────────────────
 
 def query_policy_vector_search(embedding: list[float], top_k: int = VECTOR_TOP_K) -> list[dict]:

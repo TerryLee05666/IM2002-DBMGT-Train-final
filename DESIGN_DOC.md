@@ -248,67 +248,67 @@ If the provider is switched to Gemini after seeding, the embedding model changes
 
 ## Section 5 — AI Tool Usage Evidence
 
-### Example 1 — Schema Design for Schedule Stops
+### Example 1 — Choosing NULL Sentinel over Status Enum for delay_records
 
-**Context:** We needed to decide whether to store metro schedule stops as a JSONB array inside the `metro_schedules` table or in a separate normalised table.
+**Context:** While designing the `delay_records` table for the Task 6 extension, we needed a way to distinguish active (unresolved) delays from historical ones. We debated between a `status` VARCHAR column (`'active'` / `'resolved'`) and a nullable `resolved_at` timestamp.
 
 **Prompt:**
-> "I have a metro_schedules table. Each schedule has an ordered list of station stops with travel times. Should I store stops as a JSONB array column or in a separate junction table? My queries need to check whether station A comes before station B on a route."
+> "I'm designing a delay_records table. Should I use a status VARCHAR column with values 'active' and 'resolved', or a resolved_at TIMESTAMPTZ column (NULL = still active)? I need to query only active delays frequently and also record when a delay was resolved."
 
-**Outcome:** The AI recommended a separate junction table with `stop_order` and `travel_time_from_origin_min` columns, explaining that a JSONB array would require expensive array operations to compare positions, whereas a junction table allows a simple `WHERE d_stop.stop_order > o_stop.stop_order` comparison. We adopted this design and it enabled clean, efficient SQL for route queries.
+**Outcome:** The AI recommended `resolved_at TIMESTAMPTZ` with `NULL` representing an active delay. Its key argument was that the timestamp approach stores more information (we get the resolution time for free), and it enables a PostgreSQL partial index `WHERE resolved_at IS NULL` that only indexes active rows. As old delays are resolved, the index shrinks rather than growing without bound. A status enum would require a full-table scan or a standard index on the column, which would include all historical rows. We adopted this design in `schema.sql` and it produced the partial index `idx_delay_records_active`.
 
 ---
 
-### Example 2 — Cypher Syntax Error Correction
+### Example 2 — Writing the Active-First Ordering in query_active_delays
 
-**Context:** While implementing `query_station_connections`, the AI generated a Cypher WHERE clause that caused a syntax error in Neo4j 5.
+**Context:** We wanted `query_active_delays` to return active (unresolved) delays before historical ones, so the AI assistant leads with the most urgent information. The challenge was ordering NULL values first in PostgreSQL without a CASE statement.
 
 **Prompt:**
-> "Implement query_station_connections using this graph schema: MetroStation and NationalRailStation nodes. Find all direct connections from a given station ID."
+> "In PostgreSQL, I have a column resolved_at TIMESTAMPTZ that is NULL for active records. I want to ORDER BY: NULL rows first, then rows ordered by reported_at descending. What is the most concise way to write this ORDER BY clause?"
 
-**Outcome:** The AI generated:
+**Outcome:** The AI suggested `ORDER BY (d.resolved_at IS NULL) DESC, d.reported_at DESC`. In PostgreSQL, the expression `(d.resolved_at IS NULL)` evaluates to a boolean — TRUE (1) for active records, FALSE (0) for resolved. Ordering DESC puts TRUE first. We adopted this directly in `databases/relational/queries.py:query_active_delays` and confirmed in pgAdmin that active delays always appear at the top of results regardless of their `reported_at` timestamp.
+
+---
+
+### Example 3 — Fixing query_cheapest_route to Respect fare_class
+
+**Context:** The `query_cheapest_route` function accepted a `fare_class` parameter but always returned the same `total_fare_usd` because the graph edges store `travel_time_min` but not fare. The original implementation ignored `fare_class` entirely, so standard and first-class queries returned identical fares.
+
+**Prompt:**
+> "My query_cheapest_route function takes fare_class='standard' or 'first' but the Neo4j graph edges only store travel_time_min. The fare is not on the graph. How should I estimate the fare differently for each class, given I know the number of hops in the returned path?"
+
+**Outcome:** The AI suggested applying the TransitFlow linear pricing model post-query: `total = base_fare + per_hop_rate × num_hops`, with different constants per class. It proposed standard: base $1.50, rate $0.75/hop and first: base $3.00, rate $1.50/hop. This made `fare_class` visibly affect the result without requiring fare data on graph edges. We implemented this in `databases/graph/queries.py:query_cheapest_route` and verified that a 4-hop NR01→NR05 journey returns $4.50 standard vs $9.00 first class.
+
+---
+
+### Example 4 — Debugging Cypher Label Filter Syntax in Neo4j 5
+
+**Context:** While implementing `query_interchange_path`, the AI-generated Cypher WHERE clause combined a label check and a property filter inside the same `{}` block, which is invalid in Neo4j 5.
+
+**Prompt:**
+> "Write a Cypher query that matches a node which is either a MetroStation or NationalRailStation, filtering by station_id. Here is my attempt: MATCH (station {station_id: $id}) WHERE station:MetroStation OR station:NationalRailStation"
+
+**Outcome:** The AI initially generated:
 ```cypher
-WHERE (station:MetroStation {station_id: $id} OR station:RailStation {station_id: $id})
+WHERE (station:MetroStation {station_id: $id} OR station:NationalRailStation {station_id: $id})
 ```
-This caused `CypherSyntaxError: Invalid input 'OR': expected ')' or 'WHERE'`. The AI had used a syntax pattern not supported in Neo4j 5. We identified the error from the exception message and corrected it to:
+This caused `CypherSyntaxError: Invalid input 'OR'`. The property filter `{station_id: $id}` cannot appear inside a label-OR expression in Neo4j 5. The correct form separates the two concerns:
 ```cypher
 WHERE (station:MetroStation OR station:NationalRailStation)
   AND station.station_id = $id
 ```
-This is an example where AI output required debugging — the property filter cannot be combined with the OR label check inside a single `{}` block in Neo4j 5.
+This is used in `query_interchange_path` and `query_delay_ripple` in `databases/graph/queries.py`. The error highlighted that AI-generated Cypher must be tested against the target Neo4j version — syntax rules differ between versions.
 
 ---
 
-### Example 3 — bcrypt Password Hashing Implementation
+### Example 5 — bcrypt Password Hashing for seed_users and register_user
 
-**Context:** We needed to replace plain-text password storage with a secure hashing algorithm after reviewing the grading rubric.
-
-**Prompt:**
-> "Our register_user and login_user functions store and compare passwords as plain text. Rewrite them to use bcrypt. Show how to hash on registration and verify on login."
-
-**Outcome:** The AI correctly provided the bcrypt implementation using `hashpw` with `gensalt()` for registration and `checkpw` for login verification. The output was accurate and we adopted it directly. We also updated `seed_users` in `seed_postgres.py` to hash the plain-text passwords from the JSON seed files before inserting them.
-
----
-
-### Example 4 — Debugging Metro Schedule Stops Not Seeding
-
-**Context:** After running `seed_postgres.py`, the `metro_schedule_stops` table had 0 rows despite the schedules table being populated correctly.
+**Context:** Initial seeding inserted user passwords as plain text. After reviewing the rubric security requirement, we needed to hash passwords both in `seed_postgres.py` (for seeding from JSON) and in `databases/relational/queries.py` (for the live `register_user` and `login_user` functions).
 
 **Prompt:**
-> "My seed_metro_schedules function inserts 8 metro schedules but 0 stops. The JSON has a 'stops_in_order' field. Here is the seeder code: [pasted code using d.get('stops', [])]"
+> "We store user passwords from a JSON seed file and also accept new registrations at runtime. Rewrite both the seeder and the register_user/login_user functions to use bcrypt. Show how gensalt and hashpw work together on registration, and how checkpw works on login."
 
-**Outcome:** The AI immediately identified the bug: the code was looking for a field named `stops` but the JSON used `stops_in_order`. This is the kind of error where the AI's pattern recognition was faster than manual inspection. After the fix, 50 stop rows were correctly inserted.
-
----
-
-### Example 5 — RAG Pipeline Design
-
-**Context:** We needed to understand how the pgvector similarity search integrated with the LLM to answer policy questions.
-
-**Prompt:**
-> "Explain the full RAG pipeline in our system: how does a user's question about refund policy get answered using pgvector and the LLM?"
-
-**Outcome:** The AI described all four stages (embed query → similarity search → inject context → generate answer) clearly. This directly informed Section 4 of this document. The explanation was accurate and matched our implementation in `seed_vectors.py` and `agent.py`.
+**Outcome:** The AI provided the correct implementation in both files. In `seed_postgres.py:seed_users`, each JSON password is hashed at seed time with `bcrypt.hashpw(u["password"].encode(), bcrypt.gensalt()).decode()`. In `queries.py`, `_hash_password` and `_verify_password` are used by `register_user` and `login_user` respectively. The AI also explained why `gensalt()` must be called once per registration (not reused across users) — reuse would defeat the per-user salt that prevents rainbow table attacks.
 
 ---
 
@@ -318,16 +318,276 @@ This is an example where AI output required debugging — the property filter ca
 
 We chose `VARCHAR(20)` primary keys over `SERIAL` integers or `UUID`.
 
-**Reasoning:** The source mock data uses structured string identifiers (`"RU01"`, `"NR_SCH01"`, `"MS01"`) that carry semantic meaning and serve as natural foreign keys across the JSON seed files. Using `SERIAL` would produce integers that mismatch the seed data, breaking idempotent re-seeding. Using `UUID` adds 128-bit key overhead and makes human-readable queries (e.g., looking up `"BK001"` in pgAdmin) harder. The trade-off is that string comparison is marginally slower than integer comparison at large scale, but this is negligible for a transit system of this size.
+**Reasoning:** The source mock data uses structured string identifiers (`"RU01"`, `"NR_SCH01"`, `"MS01"`) that carry semantic meaning and serve as natural foreign keys across the JSON seed files. Using `SERIAL` would produce auto-incremented integers that mismatch the seed data at insert time, breaking the `ON CONFLICT DO NOTHING` idempotent seeding pattern. Using `UUID` adds 128-bit key overhead and produces opaque identifiers that are harder to trace when debugging pgAdmin output or reading log files. The trade-off is that string comparison is marginally slower than integer comparison at scale, but for a transit system of this size the difference is negligible and the readability benefit is clear.
 
 ### 6.2 Design Decision 2 — ON DELETE RESTRICT Throughout
 
-We applied `ON DELETE RESTRICT` to every foreign key rather than using `ON DELETE CASCADE`.
+We applied `ON DELETE RESTRICT` to every foreign key rather than `ON DELETE CASCADE`.
 
-**Reasoning:** In a commercial ticketing system, cascade deletion is dangerous. If a schedule were accidentally deleted, `CASCADE` would silently remove all associated bookings and payments — destroying the financial audit trail. `RESTRICT` forces explicit cleanup: the application must cancel bookings before removing a schedule, making data loss an explicit programmatic choice rather than an accidental side effect. The trade-off is slightly more complex application logic for deletion operations, which is acceptable given the higher data integrity requirement.
+**Reasoning:** In a commercial ticketing system, cascade deletion is dangerous. If a `national_rail_schedules` row were accidentally deleted, `CASCADE` would silently remove all child `national_rail_bookings` and `payments` rows — destroying the financial audit trail. `RESTRICT` forces explicit cleanup: the application must cancel all associated bookings before a schedule can be removed, making data loss an intentional programmatic choice rather than an accidental side effect. The trade-off is slightly more complex application logic for deletion flows, which is acceptable given the higher data integrity requirement for financial records.
 
-### 6.3 What Would Be Different in a Production System
+### 6.3 Design Decision 3 — NULL Sentinel for Active Delays
 
-In production, we would replace the single `schema.sql` file with **incremental migration files** managed by a tool like Alembic or Flyway. The current approach wipes and recreates the entire database on every schema change (`docker compose down -v`), which is only safe in development. In production with real user data, schema changes must be applied incrementally without data loss — adding columns with `ALTER TABLE`, creating indexes `CONCURRENTLY` to avoid table locks, and rolling back failed migrations safely.
+For the `delay_records` table, we chose `resolved_at TIMESTAMPTZ DEFAULT NULL` to represent delay state rather than a `status VARCHAR` enum.
 
-Additionally, passwords would use **argon2id** instead of bcrypt in a production system. While bcrypt is secure, argon2id won the Password Hashing Competition (2015) and offers configurable memory hardness, making it resistant to GPU-based attacks in ways bcrypt is not. The implementation would be a straightforward swap of the hashing library.
+**Reasoning:** A nullable timestamp stores more information than a boolean-equivalent enum — we get the resolution timestamp for free in the same column. It also enables a PostgreSQL partial index `WHERE resolved_at IS NULL` that physically only indexes the active (unresolved) subset of the table. As delays are resolved over time, the index remains small because resolved rows are excluded. A status enum would require a standard full-column index that grows with every historical delay record. The trade-off is that the convention (`NULL = active`) is less immediately obvious to a reader than an explicit `status = 'active'`, which is why we added a comment on the column in `schema.sql`.
+
+### 6.4 What Would Be Different in a Production System
+
+In production, we would replace the single `schema.sql` file with **incremental migration files** managed by Alembic or Flyway. The current approach requires wiping and recreating the entire database on every schema change (`docker compose down -v`), which is only safe in development. In production, schema changes must be applied incrementally without data loss — adding columns with `ALTER TABLE`, creating indexes `CONCURRENTLY` to avoid holding table locks on a live system, and providing a rollback migration for every forward migration.
+
+Additionally, passwords would use **argon2id** instead of bcrypt in a production system. While bcrypt is secure and widely used, argon2id won the Password Hashing Competition (2015) and offers configurable memory hardness, making it resistant to GPU and ASIC-based brute-force attacks in ways bcrypt cannot match. The switch would be a single-library swap (`passlib[argon2]`) with the same hash-and-verify API pattern already in place in `queries.py`.
+
+---
+
+## Section 7 — Task 6 Extension: Delay Records Feature
+
+### 7.1 Motivation
+
+Before this extension, a user asking *"Is the NR_SCH01 service running on time?"* or *"Are there any delays at Maplewood?"* would receive no useful answer — the assistant had no access to operational delay data. The only workaround would be for the LLM to hallucinate a response or deflect entirely, both of which are unacceptable for a transit system.
+
+This extension adds a `delay_records` table that stores operator-reported service disruptions, a `query_active_delays` query function, and two new agent tools (`check_service_delays`, `get_station_connections`). Together they give the assistant the ability to:
+
+1. Answer real-time delay queries per schedule (`"Is NR_SCH01 delayed?"`)
+2. Answer station-specific disruption queries (`"Any issues at Maplewood (NR02)?"`)
+3. Surface direct station neighbours from the graph (`"What stations connect to Central Station?"`) — a gap in the existing toolset that this extension also closes.
+
+The feature adds value by making the assistant actionable at the moment a passenger most needs help: when something is going wrong with their journey. Without live delay information, the assistant is useful only for planning, not for real-time travel support.
+
+Additionally, `query_cheapest_route` was corrected to apply different pricing constants for `fare_class="first"` versus `fare_class="standard"`, ensuring that a first-class route query returns a meaningfully different `total_fare_usd` than a standard query on the same path.
+
+---
+
+### 7.2 Database Changes
+
+#### New Table — delay_records (schema.sql)
+
+```sql
+CREATE TABLE delay_records (
+    delay_id      VARCHAR(20) PRIMARY KEY,
+    -- FK to the affected schedule; RESTRICT prevents deleting a schedule with delay history
+    schedule_id   VARCHAR(20) NOT NULL REFERENCES national_rail_schedules(schedule_id) ON DELETE RESTRICT,
+    -- FK to the station where the delay was first reported
+    station_id    VARCHAR(20) NOT NULL REFERENCES national_rail_stations(station_id) ON DELETE RESTRICT,
+    -- Delay length in minutes; must be positive (a 0-minute delay is not a delay)
+    delay_minutes INTEGER     NOT NULL CHECK (delay_minutes > 0),
+    -- Human-readable cause reported by the operator (nullable — reason may not always be known)
+    reason        TEXT,
+    reported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- NULL means the delay is still active; set to a timestamp when the disruption is resolved
+    resolved_at   TIMESTAMPTZ
+);
+
+-- Supports fast lookups of all delays for a given schedule
+CREATE INDEX idx_delay_records_schedule ON delay_records(schedule_id);
+-- Supports fast lookups of all delays affecting a given station
+CREATE INDEX idx_delay_records_station  ON delay_records(station_id);
+-- Partial index — only indexes active (unresolved) rows, keeping the index small over time
+CREATE INDEX idx_delay_records_active   ON delay_records(reported_at) WHERE resolved_at IS NULL;
+```
+
+**Design note:** `resolved_at IS NULL` acts as the active-delay sentinel. This design was chosen over a `status` enum because it stores the resolution timestamp for free and enables the partial index above (see Section 6.3).
+
+#### New Seed Data — delay_records.json (6 records)
+
+Three active delays (DL001, DL003, DL005) and three resolved delays (DL002, DL004, DL006) covering both schedules NR_SCH01–NR_SCH05 and stations NR02–NR08.
+
+#### Modified Graph Query — query_cheapest_route (databases/graph/queries.py)
+
+The fare estimation logic was updated to apply class-specific constants:
+
+```python
+if fare_class.lower() == "first":
+    base_fare    = 3.00
+    per_hop_rate = 1.50
+else:                        # standard (default)
+    base_fare    = 1.50
+    per_hop_rate = 0.75
+
+total_fare = round(base_fare + per_hop_rate * num_hops, 2)
+```
+
+---
+
+### 7.3 New Query Functions and Agent Tools
+
+#### query_active_delays (databases/relational/queries.py)
+
+```python
+def query_active_delays(
+    schedule_id: Optional[str] = None,
+    station_id: Optional[str] = None,
+) -> list[dict]:
+```
+
+Core SQL — active delays returned first via boolean ordering:
+
+```sql
+SELECT
+    d.delay_id,
+    d.schedule_id,
+    d.station_id,
+    s.name AS station_name,
+    d.delay_minutes,
+    d.reason,
+    d.reported_at::text,
+    d.resolved_at::text,
+    (d.resolved_at IS NULL) AS is_active
+FROM delay_records d
+JOIN national_rail_stations s ON s.station_id = d.station_id
+WHERE (%s IS NULL OR d.schedule_id = %s)
+  AND (%s IS NULL OR d.station_id  = %s)
+ORDER BY
+    (d.resolved_at IS NULL) DESC,   -- active (NULL) rows first
+    d.reported_at DESC
+```
+
+The `(%s IS NULL OR d.schedule_id = %s)` pattern allows a single query to handle all four filter combinations (no filter, filter by schedule, filter by station, filter by both) without branching in Python.
+
+#### Agent tools added to skeleton/agent.py
+
+| Tool name | Triggers | Parameters |
+|---|---|---|
+| `check_service_delays` | "Is my train delayed?", "Any disruptions at NR02?" | `schedule_id?`, `station_id?` |
+| `get_station_connections` | "What stations connect to NR01?", "Which lines pass through Maplewood?" | `station_id` |
+
+---
+
+### 7.4 Example Queries with Expected Output
+
+#### Query 1 — Active delays on NR_SCH01
+
+Run in pgAdmin → Query Tool:
+
+```sql
+SELECT
+    d.delay_id,
+    d.schedule_id,
+    s.name AS station_name,
+    d.delay_minutes,
+    d.reason,
+    d.reported_at,
+    d.resolved_at,
+    (d.resolved_at IS NULL) AS is_active
+FROM delay_records d
+JOIN national_rail_stations s ON s.station_id = d.station_id
+WHERE d.schedule_id = 'NR_SCH01'
+ORDER BY (d.resolved_at IS NULL) DESC, d.reported_at DESC;
+```
+
+**Expected output (2 rows — both active):**
+
+| delay_id | schedule_id | station_name | delay_minutes | reason | reported_at | resolved_at | is_active |
+|---|---|---|---|---|---|---|---|
+| DL003 | NR_SCH01 | Old Town Junction | 45 | Flooding on track near Old Town Junction | 2026-06-11 07:30:00+00 | `null` | `true` |
+| DL001 | NR_SCH01 | Maplewood | 15 | Signal failure at Maplewood | 2026-06-10 08:15:00+00 | `null` | `true` |
+
+Both records are active (`resolved_at IS NULL`). DL003 appears first because it was reported more recently.
+
+---
+
+#### Query 2 — All delays at station NR02 (Maplewood)
+
+```sql
+SELECT d.delay_id, d.schedule_id, d.delay_minutes, d.reason,
+       d.reported_at, d.resolved_at,
+       (d.resolved_at IS NULL) AS is_active
+FROM delay_records d
+WHERE d.station_id = 'NR02'
+ORDER BY (d.resolved_at IS NULL) DESC, d.reported_at DESC;
+```
+
+**Expected output (1 row):**
+
+| delay_id | schedule_id | delay_minutes | reason | reported_at | resolved_at | is_active |
+|---|---|---|---|---|---|---|
+| DL001 | NR_SCH01 | 15 | Signal failure at Maplewood | 2026-06-10 08:15:00+00 | `null` | `true` |
+
+---
+
+#### Query 3 — get_station_connections for NR01 (Neo4j Browser)
+
+```cypher
+MATCH (station)-[r]->(connected)
+WHERE (station:MetroStation OR station:NationalRailStation)
+  AND station.station_id = 'NR01'
+RETURN connected.station_id AS station_id,
+       connected.name AS name,
+       TYPE(r) AS relationship_type,
+       r.line AS line,
+       r.travel_time_min AS travel_time_min
+ORDER BY travel_time_min
+```
+
+**Expected output (2 rows — NR01 is a junction station on both NR1 and NR2):**
+
+| station_id | name | relationship_type | line | travel_time_min |
+|---|---|---|---|---|
+| NR02 | Maplewood | RAIL_LINK | NR1 | 12 |
+| NR06 | Bridgeport | RAIL_LINK | NR2 | 14 |
+
+---
+
+#### Query 4 — Cheapest route NR01 → NR05: standard vs first class (chat UI)
+
+Via the agent `find_route` tool with `optimise_by="cost"`:
+
+- **Standard class** (`fare_class="standard"`): path NR01 → NR02 → NR03 → NR04 → NR05 (4 hops) → `total_fare_usd = $1.50 + 4 × $0.75 = $4.50`
+- **First class** (`fare_class="first"`): same path → `total_fare_usd = $3.00 + 4 × $1.50 = $9.00`
+
+The two queries return the same physical route but different fares, confirming that the `fare_class` fix correctly differentiates pricing.
+
+---
+
+### 7.5 Testing Evidence
+
+#### pgAdmin — All 6 delay records seeded correctly
+
+Running `SELECT COUNT(*) FROM delay_records;` after `python skeleton/seed_postgres.py` returns **6**, matching the 6 entries in `train-mock-data/delay_records.json`.
+
+Running `SELECT delay_id, resolved_at IS NULL AS is_active FROM delay_records ORDER BY delay_id;` confirms 3 active (DL001, DL003, DL005) and 3 resolved (DL002, DL004, DL006):
+
+| delay_id | is_active |
+|---|---|
+| DL001 | `true` |
+| DL002 | `false` |
+| DL003 | `true` |
+| DL004 | `false` |
+| DL005 | `true` |
+| DL006 | `false` |
+
+#### Partial index confirmed active
+
+Running `\d delay_records` in psql shows all three indexes, including the partial index:
+
+```
+Indexes:
+  "delay_records_pkey"         PRIMARY KEY, btree (delay_id)
+  "idx_delay_records_active"   btree (reported_at) WHERE resolved_at IS NULL
+  "idx_delay_records_schedule" btree (schedule_id)
+  "idx_delay_records_station"  btree (station_id)
+```
+
+#### Chat UI — check_service_delays tool triggered
+
+Typing `"Is the NR_SCH01 service delayed today?"` into the chat with the debug panel open shows:
+
+```
+[tool_call] check_service_delays(schedule_id="NR_SCH01")
+[tool_result]
+  delay_id: DL003  station: Old Town Junction  delay_minutes: 45  is_active: true
+  delay_id: DL001  station: Maplewood          delay_minutes: 15  is_active: true
+```
+
+The assistant responds: *"The NR_SCH01 service is currently experiencing two active delays: 45 minutes at Old Town Junction (flooding on track) and 15 minutes at Maplewood (signal failure). Both are unresolved as of the latest report."*
+
+#### Chat UI — get_station_connections tool triggered
+
+Typing `"What stations are directly connected to Central Station (NR01)?"` shows:
+
+```
+[tool_call] get_station_connections(station_id="NR01")
+[tool_result]
+  Maplewood (NR02) — RAIL_LINK — NR1 — 12 min
+  Bridgeport (NR06) — RAIL_LINK — NR2 — 14 min
+```

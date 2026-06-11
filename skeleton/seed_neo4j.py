@@ -58,7 +58,7 @@ def seed():
 
         for s in rail_stations:
             session.run(
-                "MERGE (n:RailStation {station_id: $id}) "
+                "MERGE (n:NationalRailStation {station_id: $id}) "
                 "SET n.name = $name, n.lines = $lines, "
                 "    n.is_interchange = $is_interchange",
                 id=s["station_id"],
@@ -66,7 +66,7 @@ def seed():
                 lines=s.get("lines", []),
                 is_interchange=s.get("is_interchange_national_rail", False),
             )
-        print(f"  Created {len(rail_stations)} RailStation nodes")
+        print(f"  Created {len(rail_stations)} NationalRailStation nodes")
 
         # ── Create Metro Links (directed edges) ───────────────────────────────
 
@@ -92,8 +92,8 @@ def seed():
         for s in rail_stations:
             for adj in s.get("adjacent_stations", []):
                 session.run(
-                    "MATCH (a:RailStation {station_id: $from_id}) "
-                    "MATCH (b:RailStation {station_id: $to_id}) "
+                    "MATCH (a:NationalRailStation {station_id: $from_id}) "
+                    "MATCH (b:NationalRailStation {station_id: $to_id}) "
                     "MERGE (a)-[r:RAIL_LINK {line: $line}]->(b) "
                     "SET r.travel_time_min = $time",
                     from_id=s["station_id"],
@@ -112,13 +112,13 @@ def seed():
             if nr_id:
                 session.run(
                     "MATCH (m:MetroStation {station_id: $metro_id}) "
-                    "MATCH (r:RailStation {station_id: $rail_id}) "
-                    "MERGE (m)-[link:INTERCHANGE]-(r)",
+                    "MATCH (r:NationalRailStation {station_id: $rail_id}) "
+                    "MERGE (m)-[link:INTERCHANGE_TO]-(r)",
                     metro_id=s["station_id"],
                     rail_id=nr_id,
                 )
                 interchange_count += 1
-        print(f"  Created {interchange_count} INTERCHANGE relationships")
+        print(f"  Created {interchange_count} INTERCHANGE_TO relationships")
 
     driver.close()
     print("\nNeo4j graph seeded successfully.")

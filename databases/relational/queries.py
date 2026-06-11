@@ -88,6 +88,11 @@ def query_national_rail_availability(
         destination_id:  e.g. "NR05"
         travel_date:     e.g. "2025-06-01" — used to count bookings; omit for general info
     """
+    # We JOIN the stops table twice (once for origin, once for destination) so we can
+    # compare stop_order values in a single query — this ensures origin comes before
+    # destination on the route and avoids returning reverse-direction schedules.
+    # is_pass_through = FALSE filters out stations the train passes without stopping.
+    # Fare is computed inline in SQL to avoid a second round-trip to the database.
     sql = """
         SELECT
             s.schedule_id,
@@ -185,6 +190,9 @@ def query_national_rail_fare(
         return None
 
     row = dict(row)
+    # Fare model: total = base_fare + (per_stop_rate × stops_travelled).
+    # Both fare classes share the same formula but use different rate columns,
+    # so we select the correct pair here rather than duplicating the arithmetic.
     if fare_class == "first":
         base = float(row["first_base_fare_usd"])
         rate = float(row["first_per_stop_rate_usd"])
@@ -303,7 +311,10 @@ def query_available_seats(
     Returns:
         List of dicts: {seat_id, coach, row, column}
     """
-    # seat_layouts table may not be seeded yet — return a generated set of seats
+    # We query already-booked seats first, then subtract them from a generated
+    # seat map. This approach avoids relying on the seat_layouts table being
+    # fully seeded — the coach/row/column layout is deterministic so we can
+    # regenerate it on the fly. First-class uses coaches A-B, standard uses C-F.
     booked_sql = """
         SELECT seat_id FROM national_rail_bookings
         WHERE schedule_id = %s AND travel_date = %s
@@ -590,9 +601,12 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
             now = datetime.now(timezone.utc).date()
             days_before = (travel_date - now).days
 
-            # Refund policy
+            # Refund policy differs by service type:
+            # - RF002 (express): stricter windows because express seats are harder to resell.
+            # - RF001 (normal): more generous because normal services run more frequently.
+            # days_before is computed from UTC today to avoid timezone-dependent results.
             if service_type == "express":
-                # RF002
+                # RF002: express services have tighter cancellation windows
                 if days_before >= 7:
                     refund_pct, policy_note = 1.0, "RF002: cancelled 7+ days before travel — 100% refund"
                 elif days_before >= 1:
@@ -600,7 +614,7 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
                 else:
                     refund_pct, policy_note = 0.0, "RF002: cancelled on day of travel — no refund"
             else:
-                # RF001 normal service
+                # RF001: normal services allow partial refunds up to 14 days ahead
                 if days_before >= 14:
                     refund_pct, policy_note = 1.0, "RF001: cancelled 14+ days before travel — 100% refund"
                 elif days_before >= 7:

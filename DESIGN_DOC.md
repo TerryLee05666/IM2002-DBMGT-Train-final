@@ -10,14 +10,9 @@
 
 The ER diagrams are split into three parts for readability. All three PDFs are included in the repository root.
 
-**Part 1 — Users & Transactions** (`ERD_1_Users_Transactions.pdf`)  
-Covers: `registered_users`, `national_rail_bookings`, `payments`, `metro_travels`, `feedback`
-
-**Part 2 — Schedules & Stops** (`ERD_2_Schedules_Stops.pdf`)  
-Covers: `metro_schedules`, `metro_schedule_stops`, `national_rail_schedules`, `national_rail_schedule_stops`, `seat_layouts`, `seat_layout_seats`
-
-**Part 3 — Stations & Infrastructure** (`ERD_3_Stations_Infrastructure.pdf`)  
-Covers: `metro_stations`, `national_rail_stations`
+**Part 1 — Users & Transactions** 
+**Part 2 — Schedules & Stops** 
+**Part 3 — Stations & Infrastructure** 
 
 ### Entity Summary
 

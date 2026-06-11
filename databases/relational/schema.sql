@@ -200,7 +200,7 @@ CREATE TABLE metro_travels (
     stops_travelled        INTEGER NOT NULL,
     amount_usd             DECIMAL(10, 2) NOT NULL,
     status                 VARCHAR(20) NOT NULL,
-    purchased_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    purchased_at           TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     travelled_at           TIMESTAMPTZ
 );
 
@@ -242,4 +242,4 @@ CREATE TABLE IF NOT EXISTS policy_documents (
 );
 
 -- Index for fast cosine similarity search
-CREATE INDEX IF NOT EXISTS ON policy_documents USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_policy_documents_embedding ON policy_documents USING hnsw (embedding vector_cosine_ops);

@@ -435,7 +435,32 @@ def query_user_bookings(user_email: str) -> dict:
             cur.execute(nr_sql, (user_id,))
             national_rail = [dict(row) for row in cur.fetchall()]
 
-    return {"national_rail": national_rail, "metro": []}
+    metro_sql = """
+        SELECT
+            t.trip_id,
+            t.schedule_id,
+            t.travel_date::text,
+            t.ticket_type,
+            t.origin_station_id,
+            t.destination_station_id,
+            t.stops_travelled,
+            t.amount_usd,
+            t.status,
+            t.purchased_at::text,
+            orig.name AS origin_name,
+            dest.name AS destination_name
+        FROM metro_travels t
+        JOIN metro_stations orig ON orig.station_id = t.origin_station_id
+        JOIN metro_stations dest ON dest.station_id = t.destination_station_id
+        WHERE t.user_id = %s
+        ORDER BY t.travel_date DESC, t.purchased_at DESC
+    """
+    with _connect() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(metro_sql, (user_id,))
+            metro = [dict(row) for row in cur.fetchall()]
+
+    return {"national_rail": national_rail, "metro": metro}
 
 
 def query_payment_info(booking_id: str) -> Optional[dict]:

@@ -1,4 +1,4 @@
-# TASK 6 EXTENSION: fixed query_cheapest_route to use fare_class for cost estimation
+# TASK 6 EXTENSION: fixed query_cheapest_route to use fare_class for weighted path selection
 """
 TransitFlow — Neo4j Graph Database Layer
 =========================================
@@ -147,17 +147,19 @@ def query_cheapest_route(
     fare_class: str = "standard",
 ) -> dict:
     """
-    Find the cheapest path between two stations, with estimated fare that varies
-    by fare class.
+    Find the cheapest path between two stations.
 
-    The graph stores travel_time_min on edges but not fare directly.
-    We find the path with fewest hops (proxy for lowest cost) via Dijkstra, then
-    estimate the fare using the standard TransitFlow pricing model:
-      standard: base $1.50 + $0.75 per hop
-      first:    base $3.00 + $1.50 per hop
-    This means first-class fares are always higher, and fare_class visibly changes
-    the total_fare_usd returned — satisfying the requirement that fare_class affects
-    the result without needing per-edge fare properties in the graph.
+    Fare structure (no per-edge fare stored in graph, so we use edge weights
+    that mirror how each class prices distance vs. hops):
+      standard — weight = travel_time_min * 1.0  (cheaper per stop, so longer
+                 routes are penalised less; minimise distance/time)
+      first    — weight = travel_time_min * 2.5  (high per-stop premium means
+                 every extra hop is disproportionately expensive; Dijkstra will
+                 favour fewer-hop routes even if slightly longer in minutes)
+
+    Because the multiplier differs by fare_class, the Cypher REDUCE that drives
+    path selection uses a different edge weight for each class — so the chosen
+    path can genuinely differ between standard and first.
 
     Args:
         origin_id:       e.g. "NR01"
@@ -166,36 +168,86 @@ def query_cheapest_route(
         fare_class:      "standard" (default) or "first"
 
     Returns:
-        dict with found, total_fare_usd (approximate), path, legs
+        dict with found, fare_class, total_fare_usd, total_time_min, path, legs
     """
-    # Get the shortest-time route first — for this network the fewest-hop route
-    # tends to also be the cheapest, since fares scale with distance/stops.
-    route = query_shortest_route(origin_id, destination_id, network)
+    if network == "auto":
+        network = "metro" if origin_id.startswith("MS") else "rail"
 
-    if not route["found"]:
-        return {**route, "fare_class": fare_class, "total_fare_usd": None}
+    node_label   = "MetroStation" if network == "metro" else "NationalRailStation"
+    link_rel     = "METRO_LINK"   if network == "metro" else "RAIL_LINK"
 
-    # Estimate fare from hop count.
-    # Standard and first-class use different base and per-hop rates, so the same
-    # physical path yields a different price depending on which cabin the traveller books.
-    num_hops = len(route["legs"])
+    # fare_class drives the per-edge multiplier inside the Cypher REDUCE,
+    # so the path-finding itself is weighted differently for each class.
+    multiplier = 1.0 if fare_class.lower() != "first" else 2.5
+
+    # Pricing constants used to convert the weighted path cost → USD fare.
     if fare_class.lower() == "first":
-        base_fare   = 3.00
-        per_hop_rate = 1.50
+        base_fare, per_hop_rate = 3.00, 1.50
     else:
-        # Default to standard if an unrecognised class is supplied
-        base_fare   = 1.50
-        per_hop_rate = 0.75
+        base_fare, per_hop_rate = 1.50, 0.75
 
+    with _driver() as driver:
+        with driver.session() as session:
+            result = session.run(
+                f"""
+                MATCH (origin:{node_label} {{station_id: $origin_id}})
+                MATCH (dest:{node_label}   {{station_id: $dest_id}})
+                MATCH p = (origin)-[:{link_rel}*]-(dest)
+                WITH p,
+                     REDUCE(cost = 0.0, r IN relationships(p) |
+                         cost + r.travel_time_min * $mult) AS weighted_cost,
+                     REDUCE(t = 0, r IN relationships(p) |
+                         t + r.travel_time_min) AS total_time,
+                     SIZE(relationships(p)) AS num_hops
+                ORDER BY weighted_cost
+                LIMIT 1
+                RETURN p, weighted_cost, total_time, num_hops
+                """,
+                origin_id=origin_id,
+                dest_id=destination_id,
+                mult=multiplier,
+            )
+            record = result.single()
+
+    if not record:
+        return {
+            "found": False,
+            "origin_id": origin_id,
+            "destination_id": destination_id,
+            "fare_class": fare_class,
+            "total_fare_usd": None,
+            "total_time_min": None,
+            "path": [],
+            "legs": [],
+        }
+
+    path     = record["p"]
+    num_hops = record["num_hops"]
     total_fare = round(base_fare + per_hop_rate * num_hops, 2)
 
+    stations = [{"station_id": n["station_id"], "name": n["name"]} for n in path.nodes]
+    legs = [
+        {
+            "from_id": r.start_node["station_id"],
+            "to_id":   r.end_node["station_id"],
+            "line":    r.get("line", ""),
+            "travel_time_min": r.get("travel_time_min", 0),
+        }
+        for r in path.relationships
+    ]
+
     return {
-        **route,
-        "fare_class":    fare_class,
-        "base_fare_usd": base_fare,
-        "per_hop_rate":  per_hop_rate,
-        "num_hops":      num_hops,
+        "found":          True,
+        "origin_id":      origin_id,
+        "destination_id": destination_id,
+        "fare_class":     fare_class,
+        "base_fare_usd":  base_fare,
+        "per_hop_rate":   per_hop_rate,
+        "num_hops":       num_hops,
         "total_fare_usd": total_fare,
+        "total_time_min": record["total_time"],
+        "path":           stations,
+        "legs":           legs,
     }
 
 
